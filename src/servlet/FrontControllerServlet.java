@@ -19,14 +19,16 @@ public class FrontControllerServlet extends HttpServlet {
         
         // On récupère l'URL complète tapée par l'utilisateur
         String urlDemandee = request.getRequestURL().toString();
+        String methodeHttp = request.getMethod();
         
         // On affiche le résultat directement sur l'écran du navigateur
         out.println("<html>");
         out.println("<head><title>Sprint 0</title></head>");
         out.println("<body>");
         out.println("<h1>[Sprint 0] Mon Framework Spring MVC</h1>");
-        out.println("<p>Le FrontControllerServlet a bien intercepté la requête.</p>");
-        out.println("<strong>L'URL détectée est :</strong> " + urlDemandee);
+        out.println("<p>Le FrontControllerServlet a bien intercepte la requete.</p>");
+        out.println("<strong>L'URL detectee est :</strong> " + urlDemandee);
+        out.println("<br><strong>Methode HTTP utilisee :</strong> " + methodeHttp);
         out.println("</body>");
         out.println("</html>");
     }

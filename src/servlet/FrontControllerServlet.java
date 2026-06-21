@@ -6,8 +6,33 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.util.ArrayList;
+import java.util.List;
+import annotation.Controller;
+import util.Utils;
 
 public class FrontControllerServlet extends HttpServlet {
+
+    private List<Class<?>> listeControllers = new ArrayList<>();
+
+    @Override
+    public void init() throws ServletException {
+        try {
+            List<Class<?>> toutesLesClasses = Utils.getClasses("test");
+
+            for (Class<?> classe : toutesLesClasses) {
+                if (classe.isAnnotationPresent(Controller.class)) {
+                    listeControllers.add(classe);
+                    System.out.println("[Framework] Controleur detecte : " + classe.getName());
+                }
+            }
+
+            System.out.println("[Framework] Scan termine. " + listeControllers.size() + " controleur(s) reconnu(s).");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
 
     // Méthode centrale qui gère toutes les requêtes
     protected void processRequest(HttpServletRequest request, HttpServletResponse response)
@@ -29,6 +54,13 @@ public class FrontControllerServlet extends HttpServlet {
         out.println("<p>Le FrontControllerServlet a bien intercepte la requete.</p>");
         out.println("<strong>L'URL detectee est :</strong> " + urlDemandee);
         out.println("<br><strong>Methode HTTP utilisee :</strong> " + methodeHttp);
+       // out.println("<br><strong>Nombre de controleurs detectes :</strong> " + listeControllers.size());
+        out.println("<br><strong>Controleurs detectes :</strong>");
+        out.println("<ul>");
+        for (Class<?> controleur : listeControllers) {
+            out.println("<li>" + controleur.getSimpleName() + "</li>");
+        }
+        out.println("</ul>");
         out.println("</body>");
         out.println("</html>");
     }

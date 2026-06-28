@@ -38,8 +38,14 @@ public class FrontControllerServlet extends HttpServlet {
                     if (methode.isAnnotationPresent(GetMapping.class)) {
                         GetMapping annotation = methode.getAnnotation(GetMapping.class);
                         String url = annotation.value();
-                        urlMapping.put(url, methode);
-                        System.out.println("[Framework] URL enregistree : " + url + " -> " + methode.getName());
+                        String[] methodesHttp = annotation.method();
+
+                        // Pour chaque methode HTTP declaree, on cree une entree dans le carnet
+                        for (String methodHttp : methodesHttp) {
+                            String cle = url + " " + methodHttp.toUpperCase();
+                            urlMapping.put(cle, methode);
+                            System.out.println("[Framework] URL enregistree : " + cle + " -> " + methode.getName());
+                        }
                     }
                 }
             }
@@ -97,13 +103,16 @@ public class FrontControllerServlet extends HttpServlet {
     out.println("<html>");
     out.println("<head><title>Sprint 2</title></head>");
     out.println("<body>");
-    out.println("<h1>[Sprint 2] Mon Framework Spring MVC</h1>");
+    out.println("<h1>[Sprint 3] Mon Framework Spring MVC</h1>");
     out.println("<p>URL demandee : <strong>" + url + "</strong></p>");
 
-    // On cherche cette URL dans notre carnet de routage
-    if (urlMapping.containsKey(url)) {
+
+    String methodeHttp = request.getMethod().toUpperCase();
+    String cle = url + " " + methodeHttp;
+    // On cherche cette cle (URL) dans notre carnet de routage
+    if (urlMapping.containsKey(cle)) {
         // URL trouvee -> on appelle la methode correspondante
-        Method methode = urlMapping.get(url);
+        Method methode = urlMapping.get(cle);
         out.println("<p>Methode trouvee : <strong>" + methode.getName() + "</strong></p>");
         out.println("<p>Dans le controleur : <strong>" + methode.getDeclaringClass().getSimpleName() + "</strong></p>");
     } else {

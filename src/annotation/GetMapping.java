@@ -11,4 +11,5 @@ import java.lang.annotation.Target;
 @Target(ElementType.METHOD)
 public @interface GetMapping {
     String value(); // l'URL a stocker, ex: "/emp/list"
+     String[] method() default {"GET"};
 }

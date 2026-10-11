@@ -15,9 +15,15 @@ import annotation.RequestParam;
 import annotation.RestAPI;
 import util.Utils;
 import exception.BindingException;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import util.JsonSerializer;
 
@@ -241,26 +247,25 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
             if (HttpServletRequest.class.isAssignableFrom(parametre.getType())) {
                 // Injection de la requete directement
                 arguments[i] = request;
-            } else {
+            } else if (isSimpleType(parametre.getType())) {
+                // Type simple (String, int, double...) -> binding par nom
                 arguments[i] = bind(params, parametre);
+            } else {
+                // Objet complexe (Employe, Personne...) -> SPRINT 7 BIS
+                arguments[i] = bindObject(parametre.getType(), params);
             }
         }
         return arguments;
     }
 
     /**
-     * Fait le binding d'UN parametre de methode avec les valeurs de la requete.
+     * Fait le binding d'UN parametre de type SIMPLE avec les valeurs de la requete.
      * Testable sans servlet (on passe simplement une Map).
+     * Les objets complexes sont traites par bindObject (Sprint 7 bis).
      */
     public static Object bind(Map<String, String> params, Parameter parametre)
             throws BindingException {
         Class<?> type = parametre.getType();
-
-        // Un objet complexe n'est pas encore gere -> Sprint 7 bis
-        if (!isSimpleType(type)) {
-            throw new BindingException(
-                "Parametre objet non supporte (Sprint 7 bis) : " + type.getSimpleName());
-        }
 
         // Nom de la variable : @RequestParam("nom") sinon nom du parametre (-parameters)
         RequestParam requestParam = parametre.getAnnotation(RequestParam.class);
@@ -338,6 +343,103 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
         } catch (NumberFormatException e) {
             throw new BindingException(
                 "Valeur invalide pour " + type.getSimpleName() + " : '" + valeur + "'");
+        }
+    }
+
+    /**
+     * SPRINT 7 BIS : lie les champs d'un formulaire a un OBJET complexe.
+     * 1. instancie l'objet (constructeur sans argument obligatoire),
+     * 2. parcourt ses champs (y compris la hierarchie, sans statistiques/synthetiques),
+     * 3. pour chaque champ simple present dans la requete, convertit la valeur
+     *    et l'injecte via le setter setXxx sinon par acces direct (reflexion).
+     * Les champs non simples (objet imbrique, List...) sont ignores.
+     */
+    public static Object bindObject(Class<?> type, Map<String, String> params)
+            throws BindingException {
+        Object objet;
+        try {
+            objet = type.getDeclaredConstructor().newInstance();
+        } catch (NoSuchMethodException
+                | InstantiationException
+                | IllegalAccessException
+                | InvocationTargetException e) {
+            throw new BindingException(
+                "Constructeur sans argument manquant pour : " + type.getSimpleName());
+        }
+
+        for (Field champ : getAllFields(type)) {
+            // On ignore les champs statiques et synthetiques
+            if (Modifier.isStatic(champ.getModifiers()) || champ.isSynthetic()) {
+                continue;
+            }
+            // Champ de type non simple (objet imbrique, List...) -> on ignore
+            if (!isSimpleType(champ.getType())) {
+                continue;
+            }
+
+            String valeur = params.get(champ.getName());
+            if (valeur == null) {
+                continue; // absent de la requete -> valeur par defaut conservee
+            }
+
+            Object convertir = convert(valeur, champ.getType());
+
+            // 1er choix : le setter setXxx s'il existe
+            if (!injecterParSetter(objet, champ, convertir)) {
+                // 2eme choix : acces direct au champ via la reflexion
+                try {
+                    champ.setAccessible(true);
+                    champ.set(objet, convertir);
+                } catch (Exception e) {
+                    throw new BindingException(
+                        "Impossible d'injecter le champ " + champ.getName());
+                }
+            }
+        }
+        return objet;
+    }
+
+    /**
+     * Raccourci lie a la requete HTTP (utilise par le Servlet).
+     */
+    public static Object bindObject(Class<?> type, HttpServletRequest request)
+            throws BindingException {
+        Map<String, String> params = new HashMap<>();
+        for (Map.Entry<String, String[]> entree : request.getParameterMap().entrySet()) {
+            String[] valeurs = entree.getValue();
+            params.put(entree.getKey(),
+                (valeurs != null && valeurs.length > 0) ? valeurs[valeurs.length - 1] : null);
+        }
+        return bindObject(type, params);
+    }
+
+    /**
+     * Recupere tous les champs declares dans la classe et ses super-classes.
+     */
+    private static List<Field> getAllFields(Class<?> classe) {
+        List<Field> champs = new ArrayList<>();
+        Class<?> c = classe;
+        while (c != null && c != Object.class) {
+            champs.addAll(Arrays.asList(c.getDeclaredFields()));
+            c = c.getSuperclass();
+        }
+        return champs;
+    }
+
+    /**
+     * Injecte la valeur via le setter setXxx s'il existe (public, type compatible).
+     * Retourne false si aucun setter n'est trouvable.
+     */
+    private static boolean injecterParSetter(Object objet, Field champ, Object valeur) {
+        String nomSetter = "set"
+                + Character.toUpperCase(champ.getName().charAt(0))
+                + champ.getName().substring(1);
+        try {
+            Method setter = objet.getClass().getMethod(nomSetter, champ.getType());
+            setter.invoke(objet, valeur);
+            return true;
+        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
+            return false;
         }
     }
 

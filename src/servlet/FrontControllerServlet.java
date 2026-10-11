@@ -10,10 +10,13 @@ import java.util.ArrayList;
 import java.util.List;
 import annotation.Controller;
 import annotation.GetMapping;
+import annotation.HttpMethod;
 import util.Utils;
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
+import util.JsonSerializer;
+import annotation.RestAPI;
 
 public class FrontControllerServlet extends HttpServlet {
 
@@ -38,11 +41,11 @@ public class FrontControllerServlet extends HttpServlet {
                     if (methode.isAnnotationPresent(GetMapping.class)) {
                         GetMapping annotation = methode.getAnnotation(GetMapping.class);
                         String url = annotation.value();
-                        String[] methodesHttp = annotation.method();
+                        HttpMethod[] methodesHttp = annotation.method();
 
                         // Pour chaque methode HTTP declaree, on cree une entree dans le carnet
-                        for (String methodHttp : methodesHttp) {
-                            String cle = url + " " + methodHttp.toUpperCase();
+                        for (HttpMethod methodHttp : methodesHttp) {
+                           String cle = url + " " + methodHttp.name();;
                             urlMapping.put(cle, methode);
                             System.out.println("[Framework] URL enregistree : " + cle + " -> " + methode.getName());
                         }
@@ -87,50 +90,93 @@ public class FrontControllerServlet extends HttpServlet {
     //     out.println("</html>");
     // }
 
-    protected void processRequest(HttpServletRequest request, HttpServletResponse response)
+protected void processRequest(HttpServletRequest request, HttpServletResponse response)
         throws ServletException, IOException {
 
-    response.setContentType("text/html;charset=UTF-8");
-    response.setCharacterEncoding("UTF-8");
-    PrintWriter out = response.getWriter();
-
-    // On recupere juste le chemin de l'URL sans le nom de l'application
-    // ex: http://localhost:8080/TestApplication/emp/list -> /emp/list
     String contextPath = request.getContextPath();
     String urlComplete = request.getRequestURI();
     String url = urlComplete.substring(contextPath.length());
-
-    out.println("<html>");
-    out.println("<head><title>Sprint 2</title></head>");
-    out.println("<body>");
-    out.println("<h1>[Sprint 3] Mon Framework Spring MVC</h1>");
-    out.println("<p>URL demandee : <strong>" + url + "</strong></p>");
-
-
     String methodeHttp = request.getMethod().toUpperCase();
     String cle = url + " " + methodeHttp;
-    // On cherche cette cle (URL) dans notre carnet de routage
+
     if (urlMapping.containsKey(cle)) {
-        // URL trouvee -> on appelle la methode correspondante
         Method methode = urlMapping.get(cle);
-        out.println("<p>Methode trouvee : <strong>" + methode.getName() + "</strong></p>");
-        out.println("<p>Dans le controleur : <strong>" + methode.getDeclaringClass().getSimpleName() + "</strong></p>");
-    } else {
-        // URL inconnue -> on affiche une erreur + la liste des URLs connues
-        out.println("<p style='color:red;'><strong>Erreur : URL inconnue !</strong></p>");
-        out.println("<p>URLs disponibles dans ce framework :</p>");
-        out.println("<ul>");
-        for (String urlConnue : urlMapping.keySet()) {
-            out.println("<li>" + urlConnue + "</li>");
+
+        // La methode a-t-elle l'annotation @RestAPI ?
+        if (methode.isAnnotationPresent(RestAPI.class)) {
+
+            // === MODE REST API : on retourne du JSON ===
+            response.setContentType("application/json");
+            response.setCharacterEncoding("UTF-8");
+            PrintWriter out = response.getWriter();
+
+            try {
+                // On cree une instance du controleur
+                Object controleurInstance = methode.getDeclaringClass()
+                                                   .getDeclaredConstructor()
+                                                   .newInstance();
+
+                // On appelle la methode et on recupere le resultat
+                Object resultat = methode.invoke(controleurInstance);
+
+                // On lit l'attribut alreadyJson de l'annotation
+                RestAPI annotation = methode.getAnnotation(RestAPI.class);
+
+                if (annotation.alreadyJson()) {
+                    // Le resultat est deja du JSON -> afficher directement
+                    out.print(resultat.toString());
+
+                } else if (resultat instanceof String) {
+                    // Le resultat est un String simple -> afficher tel quel
+                    out.print(resultat.toString());
+
+                } else {
+                    // Le resultat est un objet Java -> convertir en JSON avec Gson
+                   out.print(JsonSerializer.toJson(resultat));
+                }
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                response.setStatus(500);
+                response.getWriter().print(
+                    "{\"erreur\": \"Erreur interne : " + e.getMessage() + "\"}"
+                );
+            }
+
+        } else {
+
+            // === MODE NORMAL : comportement comme SPRINT2/3 ===
+            response.setContentType("text/html;charset=UTF-8");
+            response.setCharacterEncoding("UTF-8");
+            PrintWriter out = response.getWriter();
+            out.println("<html><body>");
+            out.println("<h1>[Sprint 6] Mon Framework Spring MVC</h1>");
+            out.println("<p>URL : <strong>" + url + "</strong></p>");
+            out.println("<p>Methode : <strong>" + methode.getName() + "</strong></p>");
+            out.println("<p>Controleur : <strong>" +
+                methode.getDeclaringClass().getSimpleName() + "</strong></p>");
+            out.println("</body></html>");
         }
-        out.println("</ul>");
+
+    } else {
+
+        // === URL INCONNUE : retourner une erreur JSON ===
+        response.setContentType("application/json");
+        response.setCharacterEncoding("UTF-8");
+        PrintWriter out = response.getWriter();
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"erreur\": \"URL inconnue\", \"urlsDisponibles\": [");
+        boolean premier = true;
+        for (String urlConnue : urlMapping.keySet()) {
+            if (!premier) sb.append(", ");
+            sb.append("\"").append(urlConnue).append("\"");
+            premier = false;
+        }
+        sb.append("]}");
+        out.print(sb.toString());
     }
-
-    out.println("</body>");
-    out.println("</html>");
-}
-
-    @Override
+    }
+     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
         processRequest(request, response);
@@ -141,4 +187,6 @@ public class FrontControllerServlet extends HttpServlet {
             throws ServletException, IOException {
         processRequest(request, response);
     }
+
+
 }

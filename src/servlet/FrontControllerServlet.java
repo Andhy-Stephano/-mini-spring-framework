@@ -26,7 +26,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import util.JsonSerializer;
+import jakarta.servlet.annotation.MultipartConfig;
+import jakarta.servlet.http.Part;
+import util.MapFile;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
+@MultipartConfig(maxFileSize = 10 * 1024 * 1024, maxRequestSize = 50 * 1024 * 1024)
 public class FrontControllerServlet extends HttpServlet {
 
     private List<Class<?>> listeControllers = new ArrayList<>();
@@ -247,12 +254,22 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
             if (HttpServletRequest.class.isAssignableFrom(parametre.getType())) {
                 // Injection de la requete directement
                 arguments[i] = request;
+            } else if (MapFile.class == parametre.getType()) {
+                // SPRINT 8 : parametre direct de type MapFile (fichier uploade)
+                RequestParam rp = parametre.getAnnotation(RequestParam.class);
+                String nom = (rp != null && !rp.value().isEmpty()) ? rp.value() : parametre.getName();
+                Part part = getPartSafe(request, nom);
+                MapFile mapFile = readPart(part, nom);
+                if (mapFile != null) {
+                    enregistrerSurDisque(mapFile, request);
+                }
+                arguments[i] = mapFile;
             } else if (isSimpleType(parametre.getType())) {
                 // Type simple (String, int, double...) -> binding par nom
                 arguments[i] = bind(params, parametre);
             } else {
-                // Objet complexe (Employe, Personne...) -> SPRINT 7 BIS
-                arguments[i] = bindObject(parametre.getType(), params);
+                // Objet complexe (Employe, Personne...) -> SPRINT 7 BIS + SPRINT 8
+                arguments[i] = bindObject(parametre.getType(), params, request);
             }
         }
         return arguments;
@@ -354,50 +371,70 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
      *    et l'injecte via le setter setXxx sinon par acces direct (reflexion).
      * Les champs non simples (objet imbrique, List...) sont ignores.
      */
-    public static Object bindObject(Class<?> type, Map<String, String> params)
-            throws BindingException {
-        Object objet;
-        try {
-            objet = type.getDeclaredConstructor().newInstance();
-        } catch (NoSuchMethodException
-                | InstantiationException
-                | IllegalAccessException
-                | InvocationTargetException e) {
-            throw new BindingException(
-                "Constructeur sans argument manquant pour : " + type.getSimpleName());
+public static Object bindObject(Class<?> type, Map<String, String> params)
+        throws BindingException {
+    return bindObject(type, params, null);   // sans requete -> champs MapFile ignores
+}
+
+public static Object bindObject(Class<?> type, Map<String, String> params,
+                                HttpServletRequest request)
+        throws BindingException {
+    Object objet;
+    try {
+        objet = type.getDeclaredConstructor().newInstance();
+    } catch (NoSuchMethodException | InstantiationException
+            | IllegalAccessException | InvocationTargetException e) {
+        throw new BindingException(
+            "Constructeur sans argument manquant pour : " + type.getSimpleName());
+    }
+
+    for (Field champ : getAllFields(type)) {
+        if (Modifier.isStatic(champ.getModifiers()) || champ.isSynthetic()) {
+            continue;
         }
 
-        for (Field champ : getAllFields(type)) {
-            // On ignore les champs statiques et synthetiques
-            if (Modifier.isStatic(champ.getModifiers()) || champ.isSynthetic()) {
-                continue;
+        // SPRINT 8 : champ de type MapFile -> lire le fichier via request.getPart()
+        if (champ.getType() == MapFile.class) {
+            Part part = (request != null) ? getPartSafe(request, champ.getName()) : null;
+            MapFile mapFile = readPart(part, champ.getName());
+            if (mapFile != null && request != null) {
+                enregistrerSurDisque(mapFile, request);
             }
-            // Champ de type non simple (objet imbrique, List...) -> on ignore
-            if (!isSimpleType(champ.getType())) {
-                continue;
-            }
-
-            String valeur = params.get(champ.getName());
-            if (valeur == null) {
-                continue; // absent de la requete -> valeur par defaut conservee
-            }
-
-            Object convertir = convert(valeur, champ.getType());
-
-            // 1er choix : le setter setXxx s'il existe
-            if (!injecterParSetter(objet, champ, convertir)) {
-                // 2eme choix : acces direct au champ via la reflexion
+            if (!injecterParSetter(objet, champ, mapFile)) {
                 try {
                     champ.setAccessible(true);
-                    champ.set(objet, convertir);
+                    champ.set(objet, mapFile);
                 } catch (Exception e) {
                     throw new BindingException(
                         "Impossible d'injecter le champ " + champ.getName());
                 }
             }
+            continue;
         }
-        return objet;
+
+        // Champ non simple (objet imbrique, List...) -> on ignore
+        if (!isSimpleType(champ.getType())) {
+            continue;
+        }
+
+        String valeur = params.get(champ.getName());
+        if (valeur == null) {
+            continue;
+        }
+        Object convertir = convert(valeur, champ.getType());
+
+        if (!injecterParSetter(objet, champ, convertir)) {
+            try {
+                champ.setAccessible(true);
+                champ.set(objet, convertir);
+            } catch (Exception e) {
+                throw new BindingException(
+                    "Impossible d'injecter le champ " + champ.getName());
+            }
+        }
     }
+    return objet;
+}
 
     /**
      * Raccourci lie a la requete HTTP (utilise par le Servlet).
@@ -410,7 +447,7 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
             params.put(entree.getKey(),
                 (valeurs != null && valeurs.length > 0) ? valeurs[valeurs.length - 1] : null);
         }
-        return bindObject(type, params);
+        return bindObject(type, params, request);
     }
 
     /**
@@ -455,5 +492,86 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
         processRequest(request, response);
     }
 
+
+    /**
+ * Lit un fichier uploade depuis la requete HTTP multipart
+ * et le transforme en objet MapFile.
+ *
+ * Part = une "partie" d'une requete multipart (peut etre du texte ou un fichier)
+ *
+ * @param part la partie de la requete contenant le fichier
+ * @param nomChamp le nom du champ input type="file"
+ * @return un MapFile avec le nom, le type et le contenu du fichier
+ */
+private static Part getPartSafe(HttpServletRequest request, String nomChamp)
+        throws BindingException {
+    try {
+        return request.getPart(nomChamp);
+    } catch (IOException | ServletException | IllegalStateException e) {
+        throw new BindingException(
+            "Erreur lecture du champ fichier '" + nomChamp + "' (requete non-multipart ?)", e);
+    }
+}
+
+public static MapFile readPart(Part part, String nomChamp) throws BindingException {
+    try {
+        if (part == null || part.getSize() == 0) {
+            return null;
+        }
+
+        // Nom du fichier depuis Content-Disposition
+        // Ex: Content-Disposition: form-data; name="rectoCIN"; filename="photo.jpg"
+        String fileName = null;
+        String contentDisposition = part.getHeader("content-disposition");
+        if (contentDisposition != null) {
+            for (String element : contentDisposition.split(";")) {
+                element = element.trim();
+                if (element.startsWith("filename=")) {
+                    fileName = element.substring("filename=".length())
+                                      .replace("\"", "").trim();
+                    break;
+                }
+            }
+        }
+        if (fileName == null || fileName.isEmpty()) {
+            fileName = nomChamp;
+        }
+
+        byte[] bytes = part.getInputStream().readAllBytes();
+
+        String contentType = part.getContentType();
+        if (contentType == null) {
+            contentType = "application/octet-stream";
+        }
+
+        return new MapFile(fileName, contentType, bytes);
+
+    } catch (IOException e) {
+        throw new BindingException(
+            "Erreur lors de la lecture du fichier pour le champ '" + nomChamp + "'", e);
+    }
+}
+
+private static void enregistrerSurDisque(MapFile mapFile, HttpServletRequest request)
+        throws BindingException {
+    try {
+        String base = System.getProperty("catalina.base");
+        if (base == null || base.isEmpty()) {
+            base = System.getProperty("java.io.tmpdir");
+        }
+        Path dossier = Paths.get(base, "uploads");
+        Files.createDirectories(dossier);
+        Path destination = dossier.resolve(mapFile.getFileName());
+        Files.write(destination, mapFile.getBytes());
+
+        String cheminAbsolu = destination.toAbsolutePath().toString();
+        request.setAttribute("cheminFichier", cheminAbsolu);
+        System.out.println("[Framework] Fichier enregistre sur disque : " + cheminAbsolu);
+
+    } catch (IOException e) {
+        throw new BindingException(
+            "Impossible d'ecrire le fichier '" + mapFile.getFileName() + "' sur le disque", e);
+    }
+}
 
 }

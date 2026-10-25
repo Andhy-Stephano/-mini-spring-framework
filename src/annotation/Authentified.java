@@ -10,4 +10,9 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.METHOD)
 public @interface Authentified {
+
+    // SPRINT 10 bis : nom de la variable de session a verifier.
+    // Si vide, on utilise l'init-param de web.xml (configuration).
+    // Si renseigne, l'annotation impose le nom (convention).
+    String value() default "";
 }

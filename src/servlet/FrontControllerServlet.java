@@ -141,11 +141,15 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
     if (urlMapping.containsKey(cle)) {
         Method methode = urlMapping.get(cle);
 
-        // SPRINT 10 : si la methode est annotee @Authentified, on verifie la session
-        // AVANT d'executer la methode d'action.
-        if (methode.isAnnotationPresent(Authentified.class) && !authentifier(request)) {
-            repondreAuthentificationRequise(response, methode);
-            return;
+        // SPRINT 10 / 10 bis : si la methode est annotee @Authentified, on verifie
+        // la session AVANT d'executer la methode d'action.
+        Authentified authentification = methode.getAnnotation(Authentified.class);
+        if (authentification != null) {
+            String nomVariable = nomVariableSession(authentification);
+            if (!authentifier(request, nomVariable)) {
+                repondreAuthentificationRequise(response, methode, nomVariable);
+                return;
+            }
         }
 
         // La methode a-t-elle l'annotation @RestAPI ?
@@ -260,17 +264,30 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
     }
 
     /**
-     * SPRINT 10 : verifie que la variable de session configuree existe.
+     * SPRINT 10 bis : choisit le nom de la variable de session.
+     * L'annotation (convention) est prioritaire ; sinon on retombe sur
+     * l'init-param de web.xml (configuration).
+     */
+    private String nomVariableSession(Authentified annotation) {
+        String nom = annotation.value();
+        if (nom == null || nom.trim().isEmpty()) {
+            return sessionVariableName;
+        }
+        return nom.trim();
+    }
+
+    /**
+     * SPRINT 10 : verifie que la variable de session demandee existe.
      * Si l'utilisateur est authentifie, on copie sa valeur dans les attributs
      * de la requete (set attribut) pour que la methode d'action puisse la lire.
      */
-    private boolean authentifier(HttpServletRequest request) {
+    private boolean authentifier(HttpServletRequest request, String nomVariable) {
         HttpSession session = request.getSession(false);
         if (session == null) {
             return false;
         }
 
-        Object valeur = session.getAttribute(sessionVariableName);
+        Object valeur = session.getAttribute(nomVariable);
         if (valeur == null) {
             return false;
         }
@@ -278,7 +295,7 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
             return false;
         }
 
-        request.setAttribute(sessionVariableName, valeur);
+        request.setAttribute(nomVariable, valeur);
         return true;
     }
 
@@ -286,8 +303,8 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
      * SPRINT 10 : reponse renvoyee quand une methode @Authentified est appelee
      * sans authentification. On ne doit jamais executer la methode d'action.
      */
-    private void repondreAuthentificationRequise(HttpServletResponse response, Method methode)
-            throws IOException {
+    private void repondreAuthentificationRequise(HttpServletResponse response, Method methode,
+            String nomVariable) throws IOException {
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
 
         if (methode.isAnnotationPresent(RestAPI.class)) {
@@ -295,7 +312,7 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
             response.setCharacterEncoding("UTF-8");
             response.getWriter().print(
                 "{\"erreur\": \"Authentification requise\", \"variableSession\": \""
-                + sessionVariableName + "\"}"
+                + nomVariable + "\"}"
             );
             return;
         }
@@ -305,7 +322,7 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
         PrintWriter out = response.getWriter();
         out.println("<html><body>");
         out.println("<h1>401 - Authentification requise</h1>");
-        out.println("<p>La variable de session <strong>" + sessionVariableName
+        out.println("<p>La variable de session <strong>" + nomVariable
                 + "</strong> est absente.</p>");
         out.println("<p>Connectez-vous d'abord, puis revenez sur cette URL.</p>");
         out.println("</body></html>");

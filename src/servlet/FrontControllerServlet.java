@@ -6,8 +6,10 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 import java.util.ArrayList;
 import java.util.List;
+import annotation.Authentified;
 import annotation.Controller;
 import annotation.GetMapping;
 import annotation.HttpMethod;
@@ -40,8 +42,28 @@ public class FrontControllerServlet extends HttpServlet {
     private List<Class<?>> listeControllers = new ArrayList<>();
     private Map<String, Method> urlMapping = new HashMap<>();
 
+    // SPRINT 10 : nom de la variable de session qui prouve l'authentification.
+    // Ce nom vient de web.xml (<init-param>), c'est donc de la CONFIGURATION.
+    public static final String AUTH_INIT_PARAM = "sessionVariableName";
+    public static final String AUTH_CONTEXT_ATTRIBUTE = "framework.auth.sessionVariable";
+    private String sessionVariableName = "utilisateur";
+
     @Override
     public void init() throws ServletException {
+        // SPRINT 10 : le framework lit la configuration dans web.xml
+        String nomConfigure = getInitParameter(AUTH_INIT_PARAM);
+        if (nomConfigure == null || nomConfigure.trim().isEmpty()) {
+            System.out.println("[Framework] Init-param '" + AUTH_INIT_PARAM
+                    + "' absent : convention '" + sessionVariableName + "' utilisee.");
+        } else {
+            sessionVariableName = nomConfigure.trim();
+        }
+
+        // On partage le nom de la variable avec tout le ServletContext
+        getServletContext().setAttribute(AUTH_CONTEXT_ATTRIBUTE, sessionVariableName);
+        System.out.println("[Framework] Variable de session d'authentification : "
+                + sessionVariableName);
+
         try {
             List<Class<?>> toutesLesClasses = Utils.getClasses("test");
 
@@ -118,6 +140,13 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
 
     if (urlMapping.containsKey(cle)) {
         Method methode = urlMapping.get(cle);
+
+        // SPRINT 10 : si la methode est annotee @Authentified, on verifie la session
+        // AVANT d'executer la methode d'action.
+        if (methode.isAnnotationPresent(Authentified.class) && !authentifier(request)) {
+            repondreAuthentificationRequise(response, methode);
+            return;
+        }
 
         // La methode a-t-elle l'annotation @RestAPI ?
         if (methode.isAnnotationPresent(RestAPI.class)) {
@@ -230,7 +259,59 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
     }
     }
 
-        /**
+    /**
+     * SPRINT 10 : verifie que la variable de session configuree existe.
+     * Si l'utilisateur est authentifie, on copie sa valeur dans les attributs
+     * de la requete (set attribut) pour que la methode d'action puisse la lire.
+     */
+    private boolean authentifier(HttpServletRequest request) {
+        HttpSession session = request.getSession(false);
+        if (session == null) {
+            return false;
+        }
+
+        Object valeur = session.getAttribute(sessionVariableName);
+        if (valeur == null) {
+            return false;
+        }
+        if (valeur instanceof String && ((String) valeur).trim().isEmpty()) {
+            return false;
+        }
+
+        request.setAttribute(sessionVariableName, valeur);
+        return true;
+    }
+
+    /**
+     * SPRINT 10 : reponse renvoyee quand une methode @Authentified est appelee
+     * sans authentification. On ne doit jamais executer la methode d'action.
+     */
+    private void repondreAuthentificationRequise(HttpServletResponse response, Method methode)
+            throws IOException {
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+
+        if (methode.isAnnotationPresent(RestAPI.class)) {
+            response.setContentType("application/json");
+            response.setCharacterEncoding("UTF-8");
+            response.getWriter().print(
+                "{\"erreur\": \"Authentification requise\", \"variableSession\": \""
+                + sessionVariableName + "\"}"
+            );
+            return;
+        }
+
+        response.setContentType("text/html;charset=UTF-8");
+        response.setCharacterEncoding("UTF-8");
+        PrintWriter out = response.getWriter();
+        out.println("<html><body>");
+        out.println("<h1>401 - Authentification requise</h1>");
+        out.println("<p>La variable de session <strong>" + sessionVariableName
+                + "</strong> est absente.</p>");
+        out.println("<p>Connectez-vous d'abord, puis revenez sur cette URL.</p>");
+        out.println("</body></html>");
+    }
+
+    /**
      * SPRINT 9 : appelle la methode d'action du developpeur.
      * 1. cree le controleur
      * 2. resout les arguments (dont MySession)

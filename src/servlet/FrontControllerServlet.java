@@ -32,6 +32,7 @@ import util.MapFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import util.MySession;
 
 @MultipartConfig(maxFileSize = 10 * 1024 * 1024, maxRequestSize = 50 * 1024 * 1024)
 public class FrontControllerServlet extends HttpServlet {
@@ -127,16 +128,19 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
             PrintWriter out = response.getWriter();
 
             try {
-                // On cree une instance du controleur
-                Object controleurInstance = methode.getDeclaringClass()
-                                                   .getDeclaredConstructor()
-                                                   .newInstance();
+                // // On cree une instance du controleur
+                // Object controleurInstance = methode.getDeclaringClass()
+                //                                    .getDeclaredConstructor()
+                //                                    .newInstance();
 
-                // SPRINT 7 : on resout les arguments a partir de la requete
-                Object[] arguments = resolveArguments(methode, request);
+                // // SPRINT 7 : on resout les arguments a partir de la requete
+                // Object[] arguments = resolveArguments(methode, request);
 
-                // On appelle la methode et on recupere le resultat
-                Object resultat = methode.invoke(controleurInstance, arguments);
+                // // On appelle la methode et on recupere le resultat
+                // Object resultat = methode.invoke(controleurInstance, arguments);
+
+                // SPRINT 9 : creation du controleur, binding, invoke et synchro de la session
+                Object resultat = invokeAction(methode, request);   
 
                 // On lit l'attribut alreadyJson de l'annotation
                 RestAPI annotation = methode.getAnnotation(RestAPI.class);
@@ -174,14 +178,15 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
             PrintWriter out = response.getWriter();
 
             try {
-                Object controleurInstance = methode.getDeclaringClass()
-                                                   .getDeclaredConstructor()
-                                                   .newInstance();
-                Object[] arguments = resolveArguments(methode, request);
-                Object resultat = methode.invoke(controleurInstance, arguments);
+                // Object controleurInstance = methode.getDeclaringClass()
+                //                                    .getDeclaredConstructor()
+                //                                    .newInstance();
+                // Object[] arguments = resolveArguments(methode, request);
+                // Object resultat = methode.invoke(controleurInstance, arguments);
+                Object resultat = invokeAction(methode, request);
 
                 out.println("<html><body>");
-                out.println("<h1>[Sprint 7] Mon Framework Spring MVC</h1>");
+                out.println("<h1>[Sprint 9] Mon Framework Spring MVC</h1>");
                 out.println("<p>URL : <strong>" + url + "</strong></p>");
                 out.println("<p>Methode : <strong>" + methode.getName() + "</strong></p>");
                 out.println("<p>Controleur : <strong>" +
@@ -225,6 +230,28 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
     }
     }
 
+        /**
+     * SPRINT 9 : appelle la methode d'action du developpeur.
+     * 1. cree le controleur
+     * 2. resout les arguments (dont MySession)
+     * 3. invoke
+     * 4. recopie chaque MySession dans la vraie HttpSession
+     */
+    private Object invokeAction(Method methode, HttpServletRequest request) throws Exception {
+        Object controleur = methode.getDeclaringClass().getDeclaredConstructor().newInstance();
+        Object[] arguments = resolveArguments(methode, request);
+
+        Object resultat = methode.invoke(controleur, arguments);
+
+        // Apres l'invoke : on recopie la session du developpeur dans HttpSession
+        for (Object argument : arguments) {
+            if (argument instanceof MySession) {
+                ((MySession) argument).applyTo(request.getSession());
+            }
+        }
+        return resultat;
+    }
+
     // ============================================================
     // SPRINT 7 : DATA BINDING (liaison des parametres de la requete
     // aux parametres de la methode du controleur)
@@ -254,6 +281,9 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
             if (HttpServletRequest.class.isAssignableFrom(parametre.getType())) {
                 // Injection de la requete directement
                 arguments[i] = request;
+            } else if (MySession.class == parametre.getType()) {                
+                // SPRINT 9 : le framework fabrique la session du developpeur    
+                arguments[i] = MySession.from(request.getSession()); 
             } else if (MapFile.class == parametre.getType()) {
                 // SPRINT 8 : parametre direct de type MapFile (fichier uploade)
                 RequestParam rp = parametre.getAnnotation(RequestParam.class);

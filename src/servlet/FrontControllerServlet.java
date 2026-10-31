@@ -35,6 +35,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import util.MySession;
+import model.User;
 
 @MultipartConfig(maxFileSize = 10 * 1024 * 1024, maxRequestSize = 50 * 1024 * 1024)
 public class FrontControllerServlet extends HttpServlet {
@@ -45,8 +46,12 @@ public class FrontControllerServlet extends HttpServlet {
     // SPRINT 10 : nom de la variable de session qui prouve l'authentification.
     // Ce nom vient de web.xml (<init-param>), c'est donc de la CONFIGURATION.
     public static final String AUTH_INIT_PARAM = "sessionVariableName";
+    // SPRINT 10 bis : nom de la variable de session contenant le profil / les roles de l'utilisateur connecte
+    public static final String ROLE_INIT_PARAM = "sessionRoleVariableName";
     public static final String AUTH_CONTEXT_ATTRIBUTE = "framework.auth.sessionVariable";
+
     private String sessionVariableName = "utilisateur";
+    private String sessionRoleVariableName = "user";
 
     @Override
     public void init() throws ServletException {
@@ -59,10 +64,21 @@ public class FrontControllerServlet extends HttpServlet {
             sessionVariableName = nomConfigure.trim();
         }
 
+        // SPRINT 10 bis : lecture de la variable contenant le profil / les roles de l'utilisateur connecte
+        String roleVar = getInitParameter(ROLE_INIT_PARAM);
+        if (roleVar == null || roleVar.trim().isEmpty()) {
+            System.out.println("[Framework] Init-param '" + ROLE_INIT_PARAM
+                    + "' absent : convention '" + sessionRoleVariableName + "' utilisee.");
+        } else {
+            sessionRoleVariableName = roleVar.trim();
+        }
+
         // On partage le nom de la variable avec tout le ServletContext
         getServletContext().setAttribute(AUTH_CONTEXT_ATTRIBUTE, sessionVariableName);
         System.out.println("[Framework] Variable de session d'authentification : "
                 + sessionVariableName);
+        System.out.println("[Framework] Variable de session du profil/role : "
+                + sessionRoleVariableName);
 
         try {
             List<Class<?>> toutesLesClasses = Utils.getClasses("test");
@@ -145,10 +161,21 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
         // la session AVANT d'executer la methode d'action.
         Authentified authentification = methode.getAnnotation(Authentified.class);
         if (authentification != null) {
-            String nomVariable = nomVariableSession(authentification);
-            if (!authentifier(request, nomVariable)) {
-                repondreAuthentificationRequise(response, methode, nomVariable);
-                return;
+            String[] rolesAutorises = authentification.roles();
+
+            // Si des roles sont precises -> on verifie le profil / les roles dans la session
+            if (rolesAutorises != null && rolesAutorises.length > 0) {
+                if (!hasAutorizedRole(request, rolesAutorises)) {
+                    repondreAuthentificationRequise(response, methode);
+                    return;
+                }
+            } else {
+                // Sinon on reste sur le mode Sprint 10 : existence de la variable de session
+                String nomVariable = nomVariableSession(authentification);
+                if (!authentifier(request, nomVariable)) {
+                    repondreAuthentificationRequise(response, methode, nomVariable);
+                    return;
+                }
             }
         }
 
@@ -219,7 +246,7 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
                 Object resultat = invokeAction(methode, request);
 
                 out.println("<html><body>");
-                out.println("<h1>[Sprint 9] Mon Framework Spring MVC</h1>");
+                out.println("<h1>[Sprint 10] Mon Framework Spring MVC</h1>");
                 out.println("<p>URL : <strong>" + url + "</strong></p>");
                 out.println("<p>Methode : <strong>" + methode.getName() + "</strong></p>");
                 out.println("<p>Controleur : <strong>" +
@@ -277,6 +304,78 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
     }
 
     /**
+     * SPRINT 10 bis : verifie que l'utilisateur connecte a au moins un des roles autorises
+     */
+    private boolean hasAutorizedRole(HttpServletRequest request, String[] rolesAutorises) {
+        HttpSession session = request.getSession(false);
+        if (session == null) {
+            return false;
+        }
+
+        // On regarde d'abord dans la variable configuree (profil/user)
+        Object profil = session.getAttribute(sessionRoleVariableName);
+        // Au cas ou on utilise aussi l'ancienne variable d'authentification
+        if (profil == null) {
+            profil = session.getAttribute(sessionVariableName);
+        }
+        if (profil == null) {
+            return false;
+        }
+
+        // Cas 1 : objet User avec ses roles
+        if (profil instanceof User) {
+            User user = (User) profil;
+            for (String roleAutorise : rolesAutorises) {
+                if (user.hasRole(roleAutorise)) {
+                    request.setAttribute(sessionRoleVariableName, user);
+                    request.setAttribute("user", user);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Cas 2 : role directement sous forme de String (ex: "PROFESSEUR")
+        if (profil instanceof String) {
+            String roleConnecte = (String) profil;
+            for (String roleAutorise : rolesAutorises) {
+                if (roleAutorise != null && roleConnecte.trim().equalsIgnoreCase(roleAutorise.trim())) {
+                    request.setAttribute(sessionRoleVariableName, roleConnecte);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Cas 3 : liste/tableau de roles
+        if (profil.getClass().isArray()) {
+            Object[] rolesSession = (Object[]) profil;
+            for (Object rs : rolesSession) {
+                if (rs == null) continue;
+                String roleConnecteStr = rs.toString();
+                for (String roleAutorise : rolesAutorises) {
+                    if (roleAutorise != null && roleConnecteStr.trim().equalsIgnoreCase(roleAutorise.trim())) {
+                        request.setAttribute(sessionRoleVariableName, profil);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Cas 4 : on compare directement avec toString() au cas ou
+        String profilStr = profil.toString();
+        for (String roleAutorise : rolesAutorises) {
+            if (roleAutorise != null && profilStr.toUpperCase().contains(roleAutorise.trim().toUpperCase())) {
+                request.setAttribute(sessionRoleVariableName, profil);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * SPRINT 10 : verifie que la variable de session demandee existe.
      * Si l'utilisateur est authentifie, on copie sa valeur dans les attributs
      * de la requete (set attribut) pour que la methode d'action puisse la lire.
@@ -325,6 +424,32 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
         out.println("<p>La variable de session <strong>" + nomVariable
                 + "</strong> est absente.</p>");
         out.println("<p>Connectez-vous d'abord, puis revenez sur cette URL.</p>");
+        out.println("</body></html>");
+    }
+
+    /**
+     * Surcharge pour le mode roles
+     */
+    private void repondreAuthentificationRequise(HttpServletResponse response, Method methode) throws IOException {
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+
+        if (methode.isAnnotationPresent(RestAPI.class)) {
+            response.setContentType("application/json");
+            response.setCharacterEncoding("UTF-8");
+            response.getWriter().print(
+                "{\"erreur\": \"Acces refuse ou authentification requise\", \"profilVariable\": \""
+                + sessionRoleVariableName + "\"}"
+            );
+            return;
+        }
+
+        response.setContentType("text/html;charset=UTF-8");
+        response.setCharacterEncoding("UTF-8");
+        PrintWriter out = response.getWriter();
+        out.println("<html><body>");
+        out.println("<h1>401 - Accès refusé / Authentification requise</h1>");
+        out.println("<p>Vous devez être connecté avec le bon profil/rôle pour accéder à cette ressource.</p>");
+        out.println("<p>Variable de session du profil : <strong>" + sessionRoleVariableName + "</strong></p>");
         out.println("</body></html>");
     }
 

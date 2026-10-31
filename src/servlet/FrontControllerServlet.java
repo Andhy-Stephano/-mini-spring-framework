@@ -27,6 +27,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import util.JsonSerializer;
 import jakarta.servlet.annotation.MultipartConfig;
 import jakarta.servlet.http.Part;
@@ -41,6 +42,9 @@ public class FrontControllerServlet extends HttpServlet {
 
     private List<Class<?>> listeControllers = new ArrayList<>();
     private Map<String, Method> urlMapping = new HashMap<>();
+
+    // SPRINT 11 : une seule instance par controleur (cle = classe du controleur)
+    private final Map<Class<?>, Object> instances = new ConcurrentHashMap<>();
 
     // SPRINT 10 : nom de la variable de session qui prouve l'authentification.
     // Ce nom vient de web.xml (<init-param>), c'est donc de la CONFIGURATION.
@@ -329,6 +333,22 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
     }
 
     /**
+     * SPRINT 11 : retourne l'instance UNIQUE du controleur.
+     * - si elle existe deja dans le Map : on la reutilise
+     * - sinon : on la cree UNE fois, on la range, puis on la retourne
+     */
+    private Object getControllerInstance(Class<?> clazz) {
+        return instances.computeIfAbsent(clazz, c -> {
+            try {
+                System.out.println("[Framework] Creation de l'instance unique de " + c.getSimpleName());
+                return c.getDeclaredConstructor().newInstance();
+            } catch (ReflectiveOperationException e) {
+                throw new RuntimeException("Impossible de creer le controleur " + c.getName(), e);
+            }
+        });
+    }
+
+    /**
      * SPRINT 9 : appelle la methode d'action du developpeur.
      * 1. cree le controleur
      * 2. resout les arguments (dont MySession)
@@ -336,7 +356,7 @@ protected void processRequest(HttpServletRequest request, HttpServletResponse re
      * 4. recopie chaque MySession dans la vraie HttpSession
      */
     private Object invokeAction(Method methode, HttpServletRequest request) throws Exception {
-        Object controleur = methode.getDeclaringClass().getDeclaredConstructor().newInstance();
+        Object controleur = getControllerInstance(methode.getDeclaringClass());
         Object[] arguments = resolveArguments(methode, request);
 
         Object resultat = methode.invoke(controleur, arguments);
